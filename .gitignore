@@ -1,0 +1,21 @@
+# Amn-generated .gitignore
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+node_modules/
+dist/
+build/
+*.db
+*.sqlite*
+*.log
+data/uploads/
+data/frames/
+uploads/
+static_media/
+.DS_Store
+.mp4

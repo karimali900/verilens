@@ -1,0 +1,21 @@
+services:
+  backend:
+    build: ./backend
+    container_name: verilens-backend
+    ports:
+      - "8012:8012"
+    volumes:
+      - verilens-data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: verilens-frontend
+    ports:
+      - "3012:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  verilens-data:
