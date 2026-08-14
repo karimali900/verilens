@@ -4,15 +4,42 @@ import os
 import re
 
 import exifread
+import pytesseract
 from PIL import Image, ImageChops, ImageOps
 
 os.environ.setdefault("PIL_SIMD_OPTIMIZE", "0")
+
+TESSDATA_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "tessdata"
+)
 
 
 def load_bytes(data: bytes) -> Image.Image:
     img = Image.open(io.BytesIO(data))
     img.load()
     return img
+
+
+def ocr_text(data: bytes) -> dict:
+    try:
+        img = load_bytes(data).convert("RGB")
+    except Exception as e:
+        return {"ok": False, "error": f"decode failed: {e}"}
+    config = f"--tessdata-dir {TESSDATA_DIR}" if os.path.isdir(TESSDATA_DIR) else ""
+    langs = "eng+ara"
+    try:
+        raw = pytesseract.image_to_string(img, lang=langs, config=config)
+    except Exception:
+        try:
+            raw = pytesseract.image_to_string(img, lang="eng", config=config)
+            langs = "eng"
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in raw.splitlines() if ln.strip()]
+    text = "\n".join(lines)[:3000]
+    if len(text) < 8:
+        return {"ok": True, "text": "", "chars": 0, "words": 0, "langs": langs}
+    return {"ok": True, "text": text, "chars": len(text), "words": len(text.split()), "langs": langs}
 
 
 def _safe_value(v):

@@ -42,6 +42,13 @@ const en = {
   no_similar_img: "No similar images located. This is common for fresh or AI-generated images.",
   found_on: "Found on: {list}",
 
+  ocr_title: "Text found in the image",
+  ocr_langs: "{n} characters extracted",
+  ocr_none: "No readable text detected in this image.",
+  text_check_title: "Verification of the embedded text",
+  text_check_sub: "The text extracted from the image was verified against live news & fact-check sources.",
+  text_check_sources: "Sources matched to this text",
+
   news_placeholder: "Paste a claim, headline, or breaking news text to verify across news sites, Google News, social media (Reddit) and fact-check databases…",
   scanning: "Scanning the web…",
   verify_news: "Verify news",
@@ -116,6 +123,13 @@ const ar = {
   pct_similar: "تشابه {n}%",
   no_similar_img: "لا توجد صور مشابهة. هذا شائع مع الصور الجديدة أو المولَّدة بالذكاء الاصطناعي.",
   found_on: "ظهرت في: {list}",
+
+  ocr_title: "النص الموجود داخل الصورة",
+  ocr_langs: "استُخرج {n} حرفاً",
+  ocr_none: "لا يوجد نص مقروء في هذه الصورة.",
+  text_check_title: "التحقق من النص المضمَّن",
+  text_check_sub: "تحقّقنا من النص المستخرج من الصورة عبر مصادر الأخبار وقواعد بيانات التحقق المباشرة.",
+  text_check_sources: "مصادر طابقت هذا النص",
 
   news_placeholder: "الصق خبراً أو عنواناً أو نصاً إخبارياً للتحقق منه عبر المواقع الإخبارية و Google News ووسائل التواصل (Reddit) وقواعد بيانات التحقق…",
   scanning: "جارٍ مسح الويب…",

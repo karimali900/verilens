@@ -8,4 +8,5 @@ feedparser>=6.0
 exifread>=3.0
 python-multipart>=0.0.9
 pillow>=10.0
+pytesseract>=0.3.10
 cloudscraper

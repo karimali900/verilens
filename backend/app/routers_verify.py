@@ -1,5 +1,7 @@
+import asyncio
 import json
 import os
+import re
 import shutil
 import uuid
 
@@ -10,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import VerifyJob, get_db
-from app.services.image_forensics import ela_analysis, exif_analysis, image_stats
+from app.services.image_forensics import ela_analysis, exif_analysis, image_stats, ocr_text
 from app.services.news_verify import verify_news
 from app.services.reverse_search import reverse_search
 from app.services.video_verify import extract_frames, probe, resolve_video_url
@@ -26,7 +28,16 @@ class VideoUrlQuery(BaseModel):
     url: str
 
 
-def _image_verdict(ela: dict, exif: dict, reverse: dict) -> dict:
+def _claim_query(text: str) -> str:
+    lines = [ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 4]
+    best = max(lines, key=len, default="")
+    if len(best) < 30:
+        best = re.sub(r"\s+", " ", text)
+    best = re.sub(r"\s+", " ", best)
+    return best[:220]
+
+
+def _image_verdict(ela: dict, exif: dict, reverse: dict, text_check: dict | None = None) -> dict:
     score = 50
     reasons = []
 
@@ -84,6 +95,22 @@ def _image_verdict(ela: dict, exif: dict, reverse: dict) -> dict:
         if best_sim >= 80:
             score += 4
 
+    if text_check:
+        tc_v = text_check.get("verdict", {})
+        n_ind = len(tc_v.get("independent_domains") or [])
+        quote = (text_check.get("query") or "")[:80]
+        if n_ind >= 2 and tc_v.get("score", 0) >= 60:
+            score += 10
+            reasons.append(f"Text embedded in the image (“{quote}”) is reported by {n_ind} independent publications.")
+        elif n_ind >= 2:
+            score += 5
+            reasons.append(f"Embedded text (“{quote}”) found in {n_ind} publications — coverage is limited.")
+        if tc_v.get("verdict") == "likely_fake" and any("question this claim" in r for r in tc_v.get("reasons", [])):
+            score -= 20
+            reasons.append("The text embedded in this image is disputed or questioned by fact-checking sources.")
+        elif tc_v.get("verdict") == "likely_fake":
+            reasons.append("Embedded text matches no public news record — absence of coverage is not evidence it is false.")
+
     score = max(0, min(100, score))
     if score >= 65:
         verdict, label = "likely_real", "likely real"
@@ -92,6 +119,13 @@ def _image_verdict(ela: dict, exif: dict, reverse: dict) -> dict:
     else:
         verdict, label = "likely_fake", "likely fake"
     return {"verdict": verdict, "label": label, "score": score, "reasons": reasons}
+
+
+async def _reverse_wrapped(data: bytes, name: str) -> dict:
+    try:
+        return await reverse_search(data, name)
+    except Exception as e:
+        return {"error": str(e), "matches": [], "match_count": 0, "domains": {}}
 
 
 @router.post("/verify/image")
@@ -111,14 +145,24 @@ async def verify_image(file: UploadFile = File(...), db: Session = Depends(get_d
     exif = exif_analysis(data)
     ela = ela_analysis(data)
 
-    try:
-        reverse = await reverse_search(data, safe_name)
-    except Exception as e:
-        reverse = {"error": str(e), "matches": [], "match_count": 0, "domains": {}}
+    reverse, ocr = await asyncio.gather(
+        _reverse_wrapped(data, safe_name),
+        asyncio.to_thread(ocr_text, data),
+    )
 
-    verdict = _image_verdict(ela, exif, reverse)
+    text_check = None
+    if ocr.get("ok") and ocr.get("chars", 0) >= 30:
+        query = _claim_query(ocr["text"])
+        if query:
+            try:
+                text_check = await verify_news(query)
+            except Exception:
+                text_check = None
 
-    result = {"stats": stats, "exif": exif, "ela": ela, "reverse": reverse, "verdict": verdict}
+    verdict = _image_verdict(ela, exif, reverse, text_check)
+
+    result = {"stats": stats, "exif": exif, "ela": ela, "reverse": reverse, "ocr": ocr,
+              "text_check": text_check, "verdict": verdict}
 
     job = VerifyJob(kind="image", raw_before=file.filename or "", result=json.dumps(result, default=str))
     db.add(job)

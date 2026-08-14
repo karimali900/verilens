@@ -55,6 +55,9 @@ function ImageVerifier() {
     if (!file) return;
     setBusy(true);
     setErr(null);
+    setResult(null);
+    setShowEla(false);
+    setShowExif(false);
     try {
       const { data } = await verifyImage(file, setProgress);
       setResult(data);
@@ -117,6 +120,49 @@ function ImageVerifier() {
               {ela?.flags?.map((f, i) => <p key={i} className="flag">⚠ {f}</p>)}
             </div>
           </div>
+
+          {result.ocr?.ok && result.ocr.chars > 0 && (
+            <div className="panel">
+              <h4>{t("ocr_title")} <span className="subnote">{t("ocr_langs", { n: result.ocr.chars })}</span></h4>
+              <pre className="ocr-text">{result.ocr.text}</pre>
+            </div>
+          )}
+          {result.ocr?.ok && result.ocr.chars === 0 && (
+            <p className="subnote">{t("ocr_none")}</p>
+          )}
+
+          {result.text_check && (
+            <div className="panel">
+              <h4>📄 {t("text_check_title")}</h4>
+              <p className="subnote">{t("text_check_sub")}</p>
+              <div style={{ maxWidth: 360 }}>
+                <VerdictCard verdict={result.text_check.verdict} />
+              </div>
+              {result.text_check.fact_checks?.length > 0 && (
+                <h5 style={{ marginTop: "1rem" }}>{t("factcheck_watch", { n: result.text_check.fact_check_count })}</h5>
+              )}
+              {result.text_check.fact_checks?.slice(0, 4).map((fc, i) => (
+                <div key={i} className="fc-row">
+                  <a href={fc.url} target="_blank" rel="noreferrer">{fc.title}</a>
+                  <span className={`fc-src${fc.source === "Factually" ? " fc-src-factually" : ""}`}>
+                    {fc.source === "Factually" ? "Factually ✓" : fc.domain}
+                  </span>
+                </div>
+              ))}
+              {result.text_check.articles?.length > 0 && (
+                <h5 style={{ marginTop: "1rem" }}>{t("text_check_sources")}</h5>
+              )}
+              {result.text_check.articles?.slice(0, 5).map((a, i) => (
+                <div key={i} className="fc-row">
+                  <a href={a.url} target="_blank" rel="noreferrer">{a.title}</a>
+                  <span className="fc-src">
+                    {a.source === "Google News" ? (a.publisher || a.domain) : a.domain}
+                    {a.date ? ` · ${new Date(a.date).toISOString().slice(0, 10)}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {showEla && ela?.heatmap_b64 && (
             <div className="panel">
@@ -199,6 +245,7 @@ function NewsVerifier() {
     if (!query.trim()) return;
     setBusy(true);
     setErr(null);
+    setResult(null);
     try {
       const { data } = await verifyNews(query);
       setResult(data);
@@ -309,6 +356,8 @@ function VideoVerifier() {
     if (!file && !url.trim()) return;
     setBusy(true);
     setErr(null);
+    setResult(null);
+    setFrameIdx(0);
     try {
       const { data } = url.trim()
         ? await verifyVideoUrl(url.trim())

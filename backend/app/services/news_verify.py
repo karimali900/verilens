@@ -71,8 +71,11 @@ async def _gdelt(query: str, extra: str = "", limit: int = 50) -> list[dict]:
         return []
 
 
-async def _google_news(query: str, limit: int = 30) -> list[dict]:
-    url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en-US&gl=US&ceid=US:en"
+async def _google_news(query: str, limit: int = 30, ar: bool = False) -> list[dict]:
+    if ar:
+        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=ar&gl=EG&ceid=EG:ar"
+    else:
+        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en-US&gl=US&ceid=US:en"
     try:
         async with httpx.AsyncClient(timeout=settings.TIMEOUT, headers=_HEADERS, follow_redirects=True) as client:
             resp = await client.get(url)
@@ -126,11 +129,16 @@ async def _reddit(query: str, limit: int = 20) -> list[dict]:
         return []
 
 
-async def _factcheck_scan(query: str) -> list[dict]:
-    extra = "fact check OR hoax OR debunked OR false OR misleading"
+async def _factcheck_scan(query: str, ar: bool = False) -> list[dict]:
+    if ar:
+        extra = "تحقق OR شائعة OR كاذب OR مضلل OR مختلق"
+        gn_query = f"{query} تحقق OR شائعة OR كاذب OR مضلل"
+    else:
+        extra = "fact check OR hoax OR debunked OR false OR misleading"
+        gn_query = f"{query} fact check OR hoax OR debunked"
     tasks = [
         _gdelt(query, extra=extra, limit=20),
-        _google_news(f"{query} fact check OR hoax OR debunked", limit=15),
+        _google_news(gn_query, limit=15, ar=ar),
         _factually_scan(query),
     ]
     results = []
@@ -321,6 +329,69 @@ def _factually_cache(refresh: bool = False) -> list[dict]:
     return items
 
 
+async def _youtube_search(query: str, limit: int = 6) -> list[dict]:
+    url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+    try:
+        async with httpx.AsyncClient(timeout=settings.TIMEOUT, headers=_HEADERS, follow_redirects=True) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return []
+            page = resp.text
+        m = re.search(r"var ytInitialData = (\{.*?\});</script>", page, re.S)
+        if not m:
+            return []
+        data = json.loads(m.group(1))
+    except Exception:
+        return []
+    out = []
+    try:
+        sections = data["contents"]["twoColumnSearchResultsRenderer"]["primaryContents"] \
+                       ["sectionListRenderer"]["contents"][0]["itemSectionRenderer"]["contents"]
+    except Exception:
+        return []
+    for it in sections:
+        vr = it.get("videoRenderer")
+        if not vr:
+            continue
+        title = ""
+        for run in (vr.get("title", {}).get("runs") or []):
+            title += run.get("text", "")
+        channel = ""
+        for run in (vr.get("ownerText", {}).get("runs") or []):
+            channel += run.get("text", "")
+        video_id = vr.get("videoId")
+        if not video_id or not title.strip():
+            continue
+        out.append({
+            "source": "YouTube",
+            "title": title.strip()[:200],
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "domain": "youtube.com",
+            "publisher": channel.strip() or "YouTube",
+            "date": None,
+            "date_raw": "",
+            "score": 0,
+            "comments": 0,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _relevant(a: dict, query: str) -> bool:
+    """Relevance gate: a result must share at least one content word with the
+    query (Arabic or English) or it's noise pulled in by the fact-check extras."""
+    q = query.lower()
+    ar_tokens = set(re.findall(r"[\u0600-\u06FF]{2,}", q))
+    en_tokens = {w for w in re.findall(r"[a-z0-9]{4,}", q) if w not in _STOPWORDS}
+    if not ar_tokens and not en_tokens:
+        return True
+    title = ((a.get("title") or "") + " " + (a.get("snippet") or "")).lower()
+    if ar_tokens:
+        return any(ar_t in title for ar_t in ar_tokens)
+    return any(t in title for t in en_tokens)
+
+
 def _domain_key(a: dict) -> str:
     """Independence key: real publishing entity. Google News items carry the true publisher
     in `publisher` (their RSS link is a news.google.com redirect)."""
@@ -340,14 +411,20 @@ def _resolve_first(articles: list[dict]) -> dict | None:
     return min(dated, key=lambda a: a["date"])
 
 
-def _verdict(articles: list[dict], factchecks: list[dict], first: dict | None) -> dict:
+def _verdict(articles: list[dict], factchecks: list[dict], first: dict | None, ar: bool = False) -> dict:
     independent = {_domain_key(a) for a in articles if _domain_key(a)}
     independent.discard("google.com")
     independent.discard("reddit.com")
+    independent.discard("youtube.com")
 
     factcheck_flagged = [fc for fc in factchecks if FAKE_SIGNALS.search(fc["title"]) or fc.get("is_factcheck_domain")]
 
     reasons = []
+    video_traces = [a for a in articles if a.get("source") == "YouTube"]
+    video_hits = len(video_traces)
+    if video_hits:
+        sample = f"{video_traces[0].get('publisher') or 'YouTube'}: “{video_traces[0]['title'][:70]}”"
+        reasons.append(f"Exact text appears as {video_hits} YouTube video title(s) — e.g. {sample}. Screenshots often come from such videos.")
     if len(independent) >= 4:
         reasons.append(f"Reported by {len(independent)} independent publications.")
     elif len(independent) >= 2:
@@ -370,6 +447,8 @@ def _verdict(articles: list[dict], factchecks: list[dict], first: dict | None) -
     score += min(50, len(independent) * 10)
     if first:
         score += 10
+    if video_hits:
+        score += 5
     if social_score >= 50:
         score += 5
     if factcheck_flagged:
@@ -386,7 +465,7 @@ def _verdict(articles: list[dict], factchecks: list[dict], first: dict | None) -
     elif score >= 40:
         verdict, label = "unverified", "unverified"
     else:
-        verdict, label = "likely_fake", "likely fake"
+        verdict, label = ("unverified", "unverified") if ar else ("likely_fake", "likely fake")
 
     return {
         "verdict": verdict,
@@ -395,20 +474,23 @@ def _verdict(articles: list[dict], factchecks: list[dict], first: dict | None) -
         "independent_domains": sorted(independent),
         "reasons": reasons,
         "social_engagement": social_score,
+        "video_hits": video_hits,
     }
 
 
 async def verify_news(query: str) -> dict:
     query = query.strip().strip('"')
+    ar = bool(re.search(r"[\u0600-\u06FF]{2,}", query))
     articles, factchecks = [], []
-    gdelt, gnews, reddit, fc = await asyncio.gather(
+    gdelt, gnews, reddit, yt, fc = await asyncio.gather(
         _gdelt(query),
-        _google_news(query),
+        _google_news(query, ar=ar),
         _reddit(query),
-        _factcheck_scan(query),
+        _youtube_search(query),
+        _factcheck_scan(query, ar=ar),
     )
-    articles = gdelt + gnews + reddit
-    factchecks = fc
+    articles = gdelt + gnews + reddit + yt
+    factchecks = [fc_ for fc_ in fc if _relevant(fc_, query)]
 
     seen = set()
     deduped = []
@@ -419,7 +501,7 @@ async def verify_news(query: str) -> dict:
             deduped.append(a)
 
     first = _resolve_first(deduped)
-    verdict = _verdict(deduped, factchecks, first)
+    verdict = _verdict(deduped, factchecks, first, ar=ar)
 
     return {
         "query": query,
